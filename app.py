@@ -73,6 +73,15 @@ def download_from_gdrive(id_or_url: str, suffix: str) -> str:
         raise RuntimeError("gdown 下載失敗，請確認連結/ID 是否可公開存取或權限設定正確。")
     return tmp.name
 
+def _is_probably_html(file_path: str) -> bool:
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(1024)
+        head_lower = head.strip().lower()
+        return head_lower.startswith(b'<!doctype') or head_lower.startswith(b'<html')
+    except Exception:
+        return False
+
 @st.cache_resource(show_spinner=True)
 def load_session(weights_path: str) -> object:
     if ort is None:
@@ -238,7 +247,12 @@ if weights_path is None:
     st.sidebar.warning("尚未提供權重檔，請先上傳。ONNX 最穩定；.pt 僅建議本地。")
     _assumption_notice()
 else:
-    if model_type.startswith("ONNX") and weights_path.endswith(".onnx"):
+    lower = weights_path.lower()
+    is_onnx = lower.endswith(".onnx")
+    is_pt = lower.endswith(".pt")
+    if is_onnx:
+        if not model_type.startswith("ONNX"):
+            st.sidebar.info("已自動依檔案副檔名改用 ONNX 後端。")
         if ort is None:
             st.error("onnxruntime 未安裝，請確認 requirements.txt 已包含 onnxruntime。")
         else:
@@ -247,9 +261,25 @@ else:
                 backend_name = "onnx"
                 st.success(f"已載入 ONNX 模型：{os.path.basename(weights_path)}")
             except Exception as e:
-                st.error(f"ONNX 載入失敗：{e}")
+                # 針對常見情境提供更明確提示
+                extra = ""
+                try:
+                    sz = os.path.getsize(weights_path)
+                    if sz < 200 * 1024:
+                        extra += "\n檔案大小異常偏小，可能是未授權或下載到 HTML/錯誤頁面。"
+                    if _is_probably_html(weights_path):
+                        extra += "\n偵測到下載內容像是 HTML 頁面：請確認 Google Drive 檔案已設為「擁有連結者可查看」，或改用檔案 ID/直接下載連結。"
+                except Exception:
+                    pass
+                if "EfficientNMS_TRT" in str(e):
+                    extra += "\n此 ONNX 內含 TensorRT 的 EfficientNMS_TRT 節點，請重新匯出為非 end2end 的 CPU 版 ONNX（不要加 --end2end）。"
+                if "INVALID_PROTOBUF" in str(e) or "Protobuf" in str(e):
+                    extra += "\nProtobuf 解析失敗：通常是下載到的不是 .onnx（例如 Google 驗證頁），或檔案已損毀/未完整。"
+                st.error(f"ONNX 載入失敗：{e}{extra}")
                 _assumption_notice()
-    elif model_type.startswith("YOLOv7") and weights_path.endswith(".pt"):
+    elif is_pt:
+        if not model_type.startswith("YOLOv7"):
+            st.sidebar.info("已自動依檔案副檔名改用 YOLOv7 (.pt) 後端。")
         try:
             backend_obj = load_yolov7_pt(weights_path)
             backend_name = "yolov7"
@@ -258,7 +288,7 @@ else:
             st.error(str(e))
             st.stop()
     else:
-        st.error("選擇的格式與檔案副檔名不一致，請重新上傳。")
+        st.error("無法判斷權重檔格式，請提供 .onnx 或 .pt。")
         st.stop()
 
 def _pil_to_np_rgb(img: Image.Image) -> np.ndarray:
