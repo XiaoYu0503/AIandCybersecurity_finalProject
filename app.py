@@ -30,6 +30,10 @@ def load_model(weights_path: str) -> Tuple[str, object]:
             model.to('cpu')
         except Exception:
             pass
+        try:
+            model.eval()
+        except Exception:
+            pass
         # 設定信心度門檻，確保低於門檻者不繪製
         try:
             model.conf = CONF_THRESH
@@ -82,14 +86,36 @@ def predict_image(np_rgb: np.ndarray, backend: str, model: object) -> np.ndarray
     """對單張 RGB 影像做推論並回傳已繪製標註的 RGB 影像。"""
     if backend == "ultralytics":
         # ultralytics: 直接指定 conf 參數，低於門檻者不會被繪製
-        results = model.predict(source=np_rgb, conf=CONF_THRESH, verbose=False)
+        try:
+            import torch  # type: ignore
+            no_grad = torch.no_grad()
+        except Exception:
+            class _Null:
+                def __enter__(self):
+                    return None
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+            no_grad = _Null()
+        with no_grad:
+            results = model.predict(source=np_rgb, conf=CONF_THRESH, verbose=False)
         # results[0].plot() 產生 BGR，需轉回 RGB
         bgr = results[0].plot()
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return rgb
     else:
         # yolov7 / yolov5: 於 model.conf 設門檻，並用 render() 取得繪製結果
-        results = model(np_rgb)
+        try:
+            import torch  # type: ignore
+            no_grad = torch.no_grad()
+        except Exception:
+            class _Null:
+                def __enter__(self):
+                    return None
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+            no_grad = _Null()
+        with no_grad:
+            results = model(np_rgb)
         rendered = results.render()[0]  # BGR
         rgb = cv2.cvtColor(rendered, cv2.COLOR_BGR2RGB)
         return rgb
