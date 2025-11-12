@@ -1,3 +1,4 @@
+rich==13.7.1  # streamlit 1.38.0 要求 rich<14
 streamlit==1.38.0
 # 專注於 YOLOv7/YOLOv5 的 torch.hub 推論，減少不必要相依以提升安裝成功率
 torch==2.2.0
