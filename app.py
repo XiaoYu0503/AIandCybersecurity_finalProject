@@ -67,8 +67,12 @@ def download_from_gdrive(id_or_url: str, suffix: str) -> str:
     except Exception as e:
         raise RuntimeError("需要安裝 gdown 才能從 Google Drive 抓取：pip install gdown") from e
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    # gdown 會依 URL 或 ID 自動處理確認頁、Cookie 等
-    ok = gdown.download(id_or_url, tmp.name, quiet=True, fuzzy=True)
+    # 若是純 ID，使用 id= 參數；若是完整網址，使用 url 參數
+    is_url = id_or_url.strip().lower().startswith(("http://", "https://"))
+    if is_url:
+        ok = gdown.download(id_or_url, tmp.name, quiet=True, fuzzy=True)
+    else:
+        ok = gdown.download(id=id_or_url.strip(), output=tmp.name, quiet=True)
     if not ok:
         raise RuntimeError("gdown 下載失敗，請確認連結/ID 是否可公開存取或權限設定正確。")
     return tmp.name
