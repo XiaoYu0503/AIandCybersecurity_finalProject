@@ -31,6 +31,16 @@ def _assumption_notice():
         "3. 於此頁面上傳輸出的 .onnx 檔案。"
     )
 
+def _get_secret(name: str) -> str | None:
+    # 先讀 Streamlit secrets，再讀環境變數
+    try:
+        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return os.getenv(name)
+
 def download_to_temp(url: str, suffix: str) -> str:
     """從 URL 下載到臨時檔，盡量顯示進度。回傳檔案路徑。"""
     r = requests.get(url, stream=True, timeout=60)
@@ -151,7 +161,10 @@ def load_yolov7_pt(weights_path: str):
 
 # ======= 模型權重選擇（側邊欄） =======
 st.sidebar.header("模型設定")
-model_type = st.sidebar.radio("選擇權重格式", ["ONNX (.onnx)", "YOLOv7 PyTorch (.pt)"])
+# 根據 secrets MODEL_FORMAT 預設後端（onnx/pt）
+fmt_secret = (_get_secret("MODEL_FORMAT") or "onnx").lower()
+default_idx = 0 if fmt_secret.startswith("onnx") else 1
+model_type = st.sidebar.radio("選擇權重格式", ["ONNX (.onnx)", "YOLOv7 PyTorch (.pt)"], index=default_idx)
 help_txt = "ONNX：建議用於雲端；.pt：僅建議本地且需已安裝 torch"
 uploaded_w = st.sidebar.file_uploader("上傳權重檔", type=["onnx", "pt"], help=help_txt)
 url_w = st.sidebar.text_input("或輸入權重 URL", placeholder="https://.../model.onnx 或 best.pt")
@@ -174,6 +187,31 @@ else:
         candidate = os.path.join(os.path.dirname(__file__), "model.onnx")
         if os.path.exists(candidate):
             weights_path = candidate
+    # 1) 若 secrets 設定了 MODEL_URL，優先自動下載
+    if weights_path is None:
+        model_url_secret = _get_secret("MODEL_URL")
+        if model_url_secret:
+            lower = model_url_secret.lower()
+            suffix = ".onnx" if (fmt_secret.startswith("onnx") or lower.endswith(".onnx")) else ".pt"
+            with st.spinner("從 MODEL_URL 自動下載權重中…"):
+                try:
+                    weights_path = download_to_temp(model_url_secret, suffix)
+                    st.sidebar.success("已從 MODEL_URL 自動下載權重")
+                except Exception as e:
+                    st.sidebar.error(f"MODEL_URL 下載失敗：{e}")
+                    weights_path = None
+    # 2) 若 secrets 設定了 MODEL_GDRIVE_ID 或 MODEL_GDRIVE_URL，自動 gdown 下載
+    if weights_path is None:
+        gd_secret = _get_secret("MODEL_GDRIVE_ID") or _get_secret("MODEL_GDRIVE_URL")
+        if gd_secret:
+            suffix = ".onnx" if fmt_secret.startswith("onnx") else ".pt"
+            with st.spinner("從 Google Drive (secrets) 自動下載權重中…"):
+                try:
+                    weights_path = download_from_gdrive(gd_secret, suffix)
+                    st.sidebar.success("已從 Google Drive 自動下載權重")
+                except Exception as e:
+                    st.sidebar.error(f"Google Drive 下載失敗：{e}")
+                    weights_path = None
     # 如果提供 URL，優先用 URL 下載
     if weights_path is None and url_w:
         # 依 model_type 或 URL 副檔名決定後綴

@@ -36,13 +36,30 @@
    - Repository：選擇上述 Repo
    - Branch：main
    - Main file path：`app.py`
-3. 啟動後，於 UI 上傳 `model.onnx`、圖片或影片即可推論。
+3. 啟動後可以：
+   - 直接使用自動下載的權重（建議用 ONNX）。
+   - 或於 UI 上傳圖片/影片、或貼上 URL/Google Drive 連結一鍵抓取推論。
 
 > 注意：
-> - 本版本以 ONNXRuntime (CPU) 推論，不依賴 torch/torchvision，避免 Python 3.13 環境相容性問題。
+> - 本版本以 ONNXRuntime (CPU) 推論為預設（雲端穩定），也支援選用 YOLOv7 .pt（本地建議）。
 > - 若 `cv2` 載入失敗，請確認 `packages.txt` 已含 `libgl1`、`libglib2.0-0`、`ffmpeg`，且使用 headless 版本。
 > - OpenCV 編碼器在雲端環境可能受限；若影片寫檔失敗，請嘗試較短影片或不同容器。
-> - 若您只有 `.pt` 權重，請先在本地將 YOLOv7 的 `best.pt` 轉為 `model.onnx` 後再上傳。（可參考 YOLOv7 repo 的 export 腳本）
+> - 若您只有 `.pt` 權重，建議先在本地轉為 `model.onnx`；若要在雲端直接使用 .pt，請自行確保 torch 能在該環境成功安裝。
+
+### 自動下載模型（推薦雲端設定）
+
+你可以在 Streamlit Cloud 設定 Secrets 或環境變數，App 啟動時會自動下載權重：
+
+- MODEL_FORMAT: onnx 或 pt（預設 onnx，會影響預設後端與下載檔案副檔名）
+- MODEL_URL: 權重的直接下載 URL（http/https）
+- MODEL_GDRIVE_ID 或 MODEL_GDRIVE_URL: Google Drive 檔案 ID 或分享連結（由 gdown 下載）
+
+範例（Secrets）:
+```
+MODEL_FORMAT = "onnx"
+MODEL_GDRIVE_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz"  # 你的權重檔案 ID
+```
+App 啟動時會自動下載並載入權重；同時你也可以在 UI 內手動輸入 URL/Drive 連結，或上傳本地檔案。
 
 ## 授權
 僅示範用途，依您資料與模型而定。
