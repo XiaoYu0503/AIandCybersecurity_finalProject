@@ -15,7 +15,7 @@ except Exception:
 
 st.set_page_config(page_title="平交道障礙物即時辨識 (ONNX)", layout="wide")
 st.title("平交道障礙物辨識 (Streamlit / ONNX)")
-st.caption("請上傳已轉換的 YOLOv7 ONNX 權重（.onnx）。信心度低於 0.7 的框不顯示。若仍只有 .pt，請先在本地轉換再上傳。")
+st.caption("預設採用 ONNXRuntime（.onnx）；也支援直接載入 YOLOv7 的 .pt（僅建議本地環境，雲端可能因套件相容性失敗）。")
 
 CONF_THRESH = 0.7
 INPUT_SIZE = 640  # 典型 YOLOv7 輸入尺寸，若訓練時不同請調整
@@ -97,46 +97,94 @@ def postprocess(outputs: List[np.ndarray], original: np.ndarray, scale: float, p
         cv2.putText(annotated, f"{conf:.2f}", (p1[0], p1[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
     return annotated
 
+def load_yolov7_pt(weights_path: str):
+    import importlib
+    try:
+        torch = importlib.import_module("torch")
+    except Exception as e:
+        raise RuntimeError("需要本地已安裝 PyTorch 才能載入 .pt：pip install torch torchvision") from e
+    try:
+        model = torch.hub.load('WongKinYiu/yolov7', 'custom', path=weights_path, trust_repo=True, force_reload=False)
+        try:
+            model.to('cpu')
+            model.eval()
+            model.conf = CONF_THRESH
+        except Exception:
+            pass
+        return model
+    except Exception as e:
+        raise RuntimeError(f"YOLOv7 .pt 載入失敗：{e}") from e
+
 # ======= 模型權重選擇（側邊欄） =======
-st.sidebar.header("模型設定 (ONNX)")
-uploaded_w = st.sidebar.file_uploader("上傳 ONNX 權重 (.onnx)", type=["onnx"], help="請先在本地把 best.pt 轉為 .onnx")
-weights_path: str | None = None
+st.sidebar.header("模型設定")
+model_type = st.sidebar.radio("選擇權重格式", ["ONNX (.onnx)", "YOLOv7 PyTorch (.pt)"])
+help_txt = "ONNX：建議用於雲端；.pt：僅建議本地且需已安裝 torch"
+uploaded_w = st.sidebar.file_uploader("上傳權重檔", type=["onnx", "pt"], help=help_txt)
+
+backend_name: str | None = None
+backend_obj: object | None = None
+
 if uploaded_w is not None:
-    wtmp = tempfile.NamedTemporaryFile(delete=False, suffix=".onnx")
+    suffix = ".onnx" if uploaded_w.name.lower().endswith(".onnx") else ".pt"
+    wtmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     wtmp.write(uploaded_w.read())
     wtmp.flush()
     weights_path = wtmp.name
 else:
-    # 提供本地開發測試：若同資料夾存在 model.onnx 自動載入
-    candidate = os.path.join(os.path.dirname(__file__), "model.onnx")
-    if os.path.exists(candidate):
-        weights_path = candidate
+    weights_path = None
+    # 本地預設：存在 model.onnx 則自動載入
+    if model_type.startswith("ONNX"):
+        candidate = os.path.join(os.path.dirname(__file__), "model.onnx")
+        if os.path.exists(candidate):
+            weights_path = candidate
 
-session = None
-if ort is None:
-    st.error("onnxruntime 套件未安裝，請確認 requirements.txt 已加入 onnxruntime。")
-elif weights_path is None:
-    st.sidebar.warning("尚未提供 ONNX 權重檔，請上傳 .onnx 後再進行推論。")
+# 載入對應 backend
+if weights_path is None:
+    st.sidebar.warning("尚未提供權重檔，請先上傳。ONNX 最穩定；.pt 僅建議本地。")
     _assumption_notice()
 else:
-    try:
-        session = load_session(weights_path)
-        st.success(f"已載入 ONNX 模型：{os.path.basename(weights_path)}")
-    except Exception as e:
-        st.error(f"ONNX 模型載入失敗：{e}")
-        _assumption_notice()
+    if model_type.startswith("ONNX") and weights_path.endswith(".onnx"):
+        if ort is None:
+            st.error("onnxruntime 未安裝，請確認 requirements.txt 已包含 onnxruntime。")
+        else:
+            try:
+                backend_obj = load_session(weights_path)
+                backend_name = "onnx"
+                st.success(f"已載入 ONNX 模型：{os.path.basename(weights_path)}")
+            except Exception as e:
+                st.error(f"ONNX 載入失敗：{e}")
+                _assumption_notice()
+    elif model_type.startswith("YOLOv7") and weights_path.endswith(".pt"):
+        try:
+            backend_obj = load_yolov7_pt(weights_path)
+            backend_name = "yolov7"
+            st.info("偵測使用 YOLOv7 .pt（僅建議本地）。")
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
+    else:
+        st.error("選擇的格式與檔案副檔名不一致，請重新上傳。")
+        st.stop()
 
 def _pil_to_np_rgb(img: Image.Image) -> np.ndarray:
     return np.array(img.convert("RGB"))
 
-def predict_image(np_rgb: np.ndarray, session: object) -> np.ndarray:
-    inp, scale, left, top = preprocess(np_rgb)
-    inputs = {session.get_inputs()[0].name: inp}
-    outputs = session.run(None, inputs)
-    annotated = postprocess(outputs, np_rgb, scale, left, top)
-    return annotated
+def predict_image(np_rgb: np.ndarray, backend: str, obj: object) -> np.ndarray:
+    if backend == "onnx":
+        inp, scale, left, top = preprocess(np_rgb)
+        inputs = {obj.get_inputs()[0].name: inp}
+        outputs = obj.run(None, inputs)
+        annotated = postprocess(outputs, np_rgb, scale, left, top)
+        return annotated
+    elif backend == "yolov7":
+        results = obj(np_rgb)  # YOLOv7 results
+        rendered = results.render()[0]  # BGR
+        rgb = cv2.cvtColor(rendered, cv2.COLOR_BGR2RGB)
+        return rgb
+    else:
+        raise RuntimeError("未知的 backend")
 
-def predict_video_to_file(in_path: str, out_path: str, session: object, progress_placeholder) -> Tuple[int, int, float]:
+def predict_video_to_file(in_path: str, out_path: str, backend: str, obj: object, progress_placeholder) -> Tuple[int, int, float]:
     cap = cv2.VideoCapture(in_path)
     if not cap.isOpened():
         raise RuntimeError("無法開啟上傳的影片檔案。")
@@ -154,7 +202,7 @@ def predict_video_to_file(in_path: str, out_path: str, session: object, progress
             if not ok:
                 break
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            annotated_rgb = predict_image(frame_rgb, session)
+            annotated_rgb = predict_image(frame_rgb, backend, obj)
             writer.write(cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR))
             frame_idx += 1
             if total_frames > 0:
@@ -167,26 +215,26 @@ def predict_video_to_file(in_path: str, out_path: str, session: object, progress
 
 # ======= UI：上傳與推論 =======
 st.subheader("圖片推論")
-image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False, disabled=(session is None))
+image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False, disabled=(backend_obj is None))
 
 col1, col2 = st.columns(2)
 with col1:
-    if image_file is not None and session is not None:
+    if image_file is not None and backend_obj is not None and backend_name is not None:
         image_bytes = image_file.read()
         img = Image.open(io.BytesIO(image_bytes))
         st.image(img, caption="原始圖片", use_column_width=True)
 with col2:
-    if image_file is not None and session is not None:
+    if image_file is not None and backend_obj is not None and backend_name is not None:
         with st.spinner("模型推論中…"):
             rgb = _pil_to_np_rgb(img)
-            annotated = predict_image(rgb, session)
+            annotated = predict_image(rgb, backend_name, backend_obj)
             st.image(annotated, caption=f"推論結果（conf ≥ {CONF_THRESH:.2f}）", use_column_width=True)
 
 st.markdown("---")
 st.subheader("影片推論")
-video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False, disabled=(session is None))
+video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False, disabled=(backend_obj is None))
 
-if video_file is not None and session is not None:
+if video_file is not None and backend_obj is not None and backend_name is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video_file.name)[1]) as src_tmp:
         src_tmp.write(video_file.read())
         src_path = src_tmp.name
@@ -195,7 +243,7 @@ if video_file is not None and session is not None:
     st.write("開始處理影片，請稍候（依影片長度而定）…")
     ph = st.empty()
     with st.spinner("影片推論中…"):
-        w, h, fps = predict_video_to_file(src_path, out_path, session, ph)
+        w, h, fps = predict_video_to_file(src_path, out_path, backend_name, backend_obj, ph)
     st.success("影片處理完成！")
     with open(out_path, "rb") as f:
         st.video(f.read())
