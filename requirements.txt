@@ -1,0 +1,7 @@
+streamlit==1.38.0
+ultralytics==8.2.90  # 作為後備或其他模型使用
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+torch>=2.2.0
+numpy>=1.24.0
+matplotlib>=3.7.0  # yolo hub 有時需要
