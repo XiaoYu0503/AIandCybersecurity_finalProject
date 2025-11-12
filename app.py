@@ -8,6 +8,7 @@ import streamlit as st
 from PIL import Image
 import cv2
 import requests
+import importlib
 
 try:
     import onnxruntime as ort
@@ -47,6 +48,19 @@ def download_to_temp(url: str, suffix: str) -> str:
     tmp.flush()
     if prog:
         prog.empty()
+    return tmp.name
+
+def download_from_gdrive(id_or_url: str, suffix: str) -> str:
+    """使用 gdown 從 Google Drive 下載到臨時檔，支援分享連結或檔案 ID。"""
+    try:
+        gdown = importlib.import_module("gdown")
+    except Exception as e:
+        raise RuntimeError("需要安裝 gdown 才能從 Google Drive 抓取：pip install gdown") from e
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    # gdown 會依 URL 或 ID 自動處理確認頁、Cookie 等
+    ok = gdown.download(id_or_url, tmp.name, quiet=True, fuzzy=True)
+    if not ok:
+        raise RuntimeError("gdown 下載失敗，請確認連結/ID 是否可公開存取或權限設定正確。")
     return tmp.name
 
 @st.cache_resource(show_spinner=True)
@@ -141,6 +155,8 @@ model_type = st.sidebar.radio("選擇權重格式", ["ONNX (.onnx)", "YOLOv7 PyT
 help_txt = "ONNX：建議用於雲端；.pt：僅建議本地且需已安裝 torch"
 uploaded_w = st.sidebar.file_uploader("上傳權重檔", type=["onnx", "pt"], help=help_txt)
 url_w = st.sidebar.text_input("或輸入權重 URL", placeholder="https://.../model.onnx 或 best.pt")
+gd_w = st.sidebar.text_input("或輸入 Google Drive 連結/ID")
+btn_gd_w = st.sidebar.button("從 Google Drive 抓取權重")
 
 backend_name: str | None = None
 backend_obj: object | None = None
@@ -168,6 +184,15 @@ else:
                 weights_path = download_to_temp(url_w, suffix)
             except Exception as e:
                 st.error(f"下載權重失敗：{e}")
+                weights_path = None
+    # 若提供 Google Drive 連結/ID 且按下按鈕，使用 gdown 抓取
+    if weights_path is None and gd_w and btn_gd_w:
+        suffix = ".onnx" if model_type.startswith("ONNX") else ".pt"
+        with st.spinner("從 Google Drive 下載權重中…"):
+            try:
+                weights_path = download_from_gdrive(gd_w, suffix)
+            except Exception as e:
+                st.error(f"Google Drive 下載失敗：{e}")
                 weights_path = None
 
 # 載入對應 backend
@@ -248,9 +273,14 @@ def predict_video_to_file(in_path: str, out_path: str, backend: str, obj: object
 # ======= UI：上傳與推論 =======
 st.subheader("圖片推論")
 image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False, disabled=(backend_obj is None))
-with st.expander("或輸入圖片 URL 推論"):
+with st.expander("或輸入圖片 URL/Google Drive 推論"):
     url_img = st.text_input("圖片 URL", placeholder="https://.../image.jpg")
-    run_img = st.button("從 URL 下載並推論", disabled=(backend_obj is None))
+    gd_img = st.text_input("圖片 Google Drive 連結/ID")
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        run_img = st.button("從 URL 下載並推論", disabled=(backend_obj is None))
+    with col_btn2:
+        run_img_gd = st.button("從 Google Drive 下載並推論", disabled=(backend_obj is None))
 
 col1, col2 = st.columns(2)
 with col1:
@@ -266,6 +296,14 @@ with col1:
                 st.image(img, caption="原始圖片 (URL)", use_column_width=True)
             except Exception as e:
                 st.error(f"下載圖片失敗：{e}")
+    elif run_img_gd and gd_img and backend_obj is not None and backend_name is not None:
+        with st.spinner("從 Google Drive 下載圖片中…"):
+            try:
+                img_path = download_from_gdrive(gd_img, suffix=".jpg")
+                img = Image.open(img_path)
+                st.image(img, caption="原始圖片 (Google Drive)", use_column_width=True)
+            except Exception as e:
+                st.error(f"Google Drive 圖片下載失敗：{e}")
 with col2:
     if image_file is not None and backend_obj is not None and backend_name is not None:
         with st.spinner("模型推論中…"):
@@ -281,9 +319,14 @@ with col2:
 st.markdown("---")
 st.subheader("影片推論")
 video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False, disabled=(backend_obj is None))
-with st.expander("或輸入影片 URL 推論"):
+with st.expander("或輸入影片 URL/Google Drive 推論"):
     url_vid = st.text_input("影片 URL", placeholder="https://.../video.mp4")
-    run_vid = st.button("從 URL 下載並推論影片", disabled=(backend_obj is None))
+    gd_vid = st.text_input("影片 Google Drive 連結/ID")
+    col_btnv1, col_btnv2 = st.columns(2)
+    with col_btnv1:
+        run_vid = st.button("從 URL 下載並推論影片", disabled=(backend_obj is None))
+    with col_btnv2:
+        run_vid_gd = st.button("從 Google Drive 下載並推論影片", disabled=(backend_obj is None))
 
 if video_file is not None and backend_obj is not None and backend_name is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video_file.name)[1]) as src_tmp:
@@ -317,6 +360,34 @@ elif run_vid and url_vid and backend_obj is not None and backend_name is not Non
             src_path = download_to_temp(url_vid, suffix=os.path.splitext(url_vid)[1] or ".mp4")
         except Exception as e:
             st.error(f"下載影片失敗：{e}")
+            src_path = None
+    if src_path:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as dst_tmp:
+            out_path = dst_tmp.name
+        st.write("開始處理影片，請稍候（依影片長度而定）…")
+        ph = st.empty()
+        with st.spinner("影片推論中…"):
+            w, h, fps = predict_video_to_file(src_path, out_path, backend_name, backend_obj, ph)
+        st.success("影片處理完成！")
+        with open(out_path, "rb") as f:
+            st.video(f.read())
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="下載處理後影片",
+                data=f,
+                file_name="predicted.mp4",
+                mime="video/mp4"
+            )
+        try:
+            os.remove(src_path)
+        except Exception:
+            pass
+elif run_vid_gd and gd_vid and backend_obj is not None and backend_name is not None:
+    with st.spinner("從 Google Drive 下載影片中…"):
+        try:
+            src_path = download_from_gdrive(gd_vid, suffix=".mp4")
+        except Exception as e:
+            st.error(f"Google Drive 影片下載失敗：{e}")
             src_path = None
     if src_path:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as dst_tmp:
