@@ -13,6 +13,8 @@
 ├─ app.py              # Streamlit 主程式
 ├─ best.pt             # 訓練完成的模型權重（需自行提供；檔案大請勿直接 push）
 ├─ requirements.txt    # 相依套件清單
+├─ runtime.txt         # Streamlit Cloud 指定 Python 版本 (3.11)
+├─ packages.txt        # 系統層必要套件 (libgl, ffmpeg 等)
 └─ README.md
 ```
 
@@ -40,6 +42,7 @@
 > - 部署於 Cloud 時，由於 GitHub 有 100MB 限制，建議：
 >   1) 在 Streamlit Cloud 的儲存空間手動上傳 `best.pt`（與 `app.py` 同層），或
 >   2) 於啟動時從您可存取的雲端（例如 S3、GDrive 直鏈）下載 `best.pt` 至臨時目錄再載入。
+> - 若出現 `ImportError: import cv2`，請確認已存在 `packages.txt`（含 libgl1、libglib2.0-0）與使用 headless OpenCV；本 repo 已提供降版 `opencv-python-headless==4.9.0.80` 與系統套件清單。
 > - 本專案偏向 CPU 推論（未強制指定 GPU），推論速度取決於影片長度與模型大小。
 > - 若 Cloud 環境的 OpenCV 不支援某些編碼器，影片寫檔可能失敗；可改傳短片、降低解析度或改用其他容器（如 .avi）。
 
