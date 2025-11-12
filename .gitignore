@@ -9,7 +9,9 @@ venv/
 *.egg-info/
 
 # Streamlit
-.streamlit/
+# 忽略 .streamlit 其他檔案，但保留 config.toml 進版控
+.streamlit/*
+!.streamlit/config.toml
 
 # OS / IDE
 .DS_Store

@@ -1,0 +1,5 @@
+[server]
+# 單檔上傳大小上限 (MB)
+maxUploadSize = 1024
+# 如需在反向代理後信任 head，請視需要設定：
+# enableXsrfProtection = true

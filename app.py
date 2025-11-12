@@ -7,6 +7,7 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 import cv2
+import requests
 
 try:
     import onnxruntime as ort
@@ -28,6 +29,25 @@ def _assumption_notice():
         "2. 在該倉庫使用 export 腳本 (示例)： python export.py --weights best.pt --grid --end2end --simplify --topk-all 100 --device cpu \n"
         "3. 於此頁面上傳輸出的 .onnx 檔案。"
     )
+
+def download_to_temp(url: str, suffix: str) -> str:
+    """從 URL 下載到臨時檔，盡量顯示進度。回傳檔案路徑。"""
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    total = int(r.headers.get('Content-Length', 0))
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    bytes_read = 0
+    prog = st.progress(0) if total > 0 else None
+    for chunk in r.iter_content(chunk_size=1024 * 1024):
+        if chunk:
+            tmp.write(chunk)
+            bytes_read += len(chunk)
+            if prog and total:
+                prog.progress(min(bytes_read / total, 1.0))
+    tmp.flush()
+    if prog:
+        prog.empty()
+    return tmp.name
 
 @st.cache_resource(show_spinner=True)
 def load_session(weights_path: str) -> object:
@@ -120,6 +140,7 @@ st.sidebar.header("模型設定")
 model_type = st.sidebar.radio("選擇權重格式", ["ONNX (.onnx)", "YOLOv7 PyTorch (.pt)"])
 help_txt = "ONNX：建議用於雲端；.pt：僅建議本地且需已安裝 torch"
 uploaded_w = st.sidebar.file_uploader("上傳權重檔", type=["onnx", "pt"], help=help_txt)
+url_w = st.sidebar.text_input("或輸入權重 URL", placeholder="https://.../model.onnx 或 best.pt")
 
 backend_name: str | None = None
 backend_obj: object | None = None
@@ -137,6 +158,17 @@ else:
         candidate = os.path.join(os.path.dirname(__file__), "model.onnx")
         if os.path.exists(candidate):
             weights_path = candidate
+    # 如果提供 URL，優先用 URL 下載
+    if weights_path is None and url_w:
+        # 依 model_type 或 URL 副檔名決定後綴
+        lower = url_w.lower()
+        suffix = ".onnx" if (model_type.startswith("ONNX") or lower.endswith(".onnx")) else ".pt"
+        with st.spinner("下載權重中…"):
+            try:
+                weights_path = download_to_temp(url_w, suffix)
+            except Exception as e:
+                st.error(f"下載權重失敗：{e}")
+                weights_path = None
 
 # 載入對應 backend
 if weights_path is None:
@@ -216,6 +248,9 @@ def predict_video_to_file(in_path: str, out_path: str, backend: str, obj: object
 # ======= UI：上傳與推論 =======
 st.subheader("圖片推論")
 image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False, disabled=(backend_obj is None))
+with st.expander("或輸入圖片 URL 推論"):
+    url_img = st.text_input("圖片 URL", placeholder="https://.../image.jpg")
+    run_img = st.button("從 URL 下載並推論", disabled=(backend_obj is None))
 
 col1, col2 = st.columns(2)
 with col1:
@@ -223,16 +258,32 @@ with col1:
         image_bytes = image_file.read()
         img = Image.open(io.BytesIO(image_bytes))
         st.image(img, caption="原始圖片", use_column_width=True)
+    elif run_img and url_img and backend_obj is not None and backend_name is not None:
+        with st.spinner("下載圖片中…"):
+            try:
+                img_path = download_to_temp(url_img, suffix=".jpg")
+                img = Image.open(img_path)
+                st.image(img, caption="原始圖片 (URL)", use_column_width=True)
+            except Exception as e:
+                st.error(f"下載圖片失敗：{e}")
 with col2:
     if image_file is not None and backend_obj is not None and backend_name is not None:
         with st.spinner("模型推論中…"):
             rgb = _pil_to_np_rgb(img)
             annotated = predict_image(rgb, backend_name, backend_obj)
             st.image(annotated, caption=f"推論結果（conf ≥ {CONF_THRESH:.2f}）", use_column_width=True)
+    elif run_img and url_img and backend_obj is not None and backend_name is not None:
+        with st.spinner("模型推論中…"):
+            rgb = _pil_to_np_rgb(img)
+            annotated = predict_image(rgb, backend_name, backend_obj)
+            st.image(annotated, caption=f"推論結果（URL）（conf ≥ {CONF_THRESH:.2f}）", use_column_width=True)
 
 st.markdown("---")
 st.subheader("影片推論")
 video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False, disabled=(backend_obj is None))
+with st.expander("或輸入影片 URL 推論"):
+    url_vid = st.text_input("影片 URL", placeholder="https://.../video.mp4")
+    run_vid = st.button("從 URL 下載並推論影片", disabled=(backend_obj is None))
 
 if video_file is not None and backend_obj is not None and backend_name is not None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video_file.name)[1]) as src_tmp:
@@ -258,6 +309,36 @@ if video_file is not None and backend_obj is not None and backend_name is not No
         os.remove(src_path)
     except Exception:
         pass
+
+elif run_vid and url_vid and backend_obj is not None and backend_name is not None:
+    # 從 URL 下載影片並推論
+    with st.spinner("下載影片中…"):
+        try:
+            src_path = download_to_temp(url_vid, suffix=os.path.splitext(url_vid)[1] or ".mp4")
+        except Exception as e:
+            st.error(f"下載影片失敗：{e}")
+            src_path = None
+    if src_path:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as dst_tmp:
+            out_path = dst_tmp.name
+        st.write("開始處理影片，請稍候（依影片長度而定）…")
+        ph = st.empty()
+        with st.spinner("影片推論中…"):
+            w, h, fps = predict_video_to_file(src_path, out_path, backend_name, backend_obj, ph)
+        st.success("影片處理完成！")
+        with open(out_path, "rb") as f:
+            st.video(f.read())
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="下載處理後影片",
+                data=f,
+                file_name="predicted.mp4",
+                mime="video/mp4"
+            )
+        try:
+            os.remove(src_path)
+        except Exception:
+            pass
 
 st.markdown("---")
 st.caption(
