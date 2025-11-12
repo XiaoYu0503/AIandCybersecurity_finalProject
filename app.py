@@ -10,7 +10,7 @@ import cv2
 
 st.set_page_config(page_title="平交道障礙物即時辨識", layout="wide")
 st.title("平交道障礙物辨識 (Streamlit)")
-st.caption("上傳圖片或影片，系統將以選定模型權重進行推論（預設 best.pt，優先 YOLOv7）；信心度低於 0.7 的框將不顯示。")
+st.caption("上傳圖片或影片，系統將以選定模型權重進行推論（建議 YOLOv7）；信心度低於 0.7 的框將不顯示。")
 
 CONF_THRESH = 0.7
 
@@ -39,47 +39,16 @@ def load_model(weights_path: str) -> Tuple[str, object]:
     except Exception as e_y7:
         y7_err = e_y7
 
-    # 2) 次之：ultralytics（YOLOv8 / 通用）
-    try:
-        from ultralytics import YOLO  # type: ignore
-        model = YOLO(weights_path)
-        try:
-            model.to("cpu")
-        except Exception:
-            pass
-        return ("ultralytics", model)
-    except Exception as e_ultra:
-        ultra_err = e_ultra
-
-    # 3) 後備：YOLOv5 via torch.hub
-    try:
-        import torch  # type: ignore
-        model = torch.hub.load(
-            'ultralytics/yolov5', 'custom', path=weights_path, force_reload=False
-        )
-        try:
-            model.to('cpu')
-        except Exception:
-            pass
-        try:
-            model.conf = CONF_THRESH
-        except Exception:
-            pass
-        return ("yolov5", model)
-    except Exception as e_y5:
-        y5_err = e_y5
-
+    # 簡化：若 YOLOv7 失敗則直接拋錯，避免 hub 套件路徑衝突
     raise RuntimeError(
-        "模型載入失敗。請確認權重檔與需求套件是否已安裝，且環境可連網以下載 torch.hub 資源。\n"
-        f"YOLOv7 錯誤: {y7_err}\n"
-        f"Ultralytics 錯誤: {ultra_err}\n"
-        f"YOLOv5 錯誤: {y5_err}"
+        "模型載入失敗（YOLOv7）。請確認權重檔為 YOLOv7 格式，且環境可連網以載入 torch.hub。\n"
+        f"YOLOv7 錯誤: {y7_err}"
     )
 
 # ======= 模型權重選擇（側邊欄） =======
 st.sidebar.header("模型設定")
-uploaded_w = st.sidebar.file_uploader("上傳模型權重 (.pt)", type=["pt"], help="若未上傳則使用專案根目錄的 best.pt")
-weights_path: str
+uploaded_w = st.sidebar.file_uploader("上傳模型權重 (.pt)", type=["pt"], help="未上傳時將不載入模型")
+weights_path: str | None = None
 if uploaded_w is not None:
     # 把上傳的 pt 寫到會話暫存檔
     wtmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pt")
@@ -87,10 +56,21 @@ if uploaded_w is not None:
     wtmp.flush()
     weights_path = wtmp.name
 else:
-    weights_path = os.path.join(os.path.dirname(__file__), "best.pt")
+    # 若本地有 best.pt 也允許使用（本地開發）
+    candidate = os.path.join(os.path.dirname(__file__), "best.pt")
+    if os.path.exists(candidate):
+        weights_path = candidate
 
-backend, model = load_model(weights_path)
-st.info(f"目前使用模型後端：{backend}\n\n權重來源：{('上傳檔案' if uploaded_w is not None else '本機 best.pt')}\n檔案：{weights_path}")
+backend = None
+model = None
+if weights_path is None:
+    st.sidebar.warning("尚未提供權重檔，請於此處上傳 .pt 後再進行推論。")
+else:
+    try:
+        backend, model = load_model(weights_path)
+        st.info(f"目前使用模型後端：{backend}\n\n權重來源：{('上傳檔案' if uploaded_w is not None else '本機 best.pt')}\n檔案：{weights_path}")
+    except Exception as e:
+        st.error(str(e))
 
 # ======= 工具函式 =======
 
@@ -157,16 +137,16 @@ def predict_video_to_file(in_path: str, out_path: str, backend: str, model: obje
 # ======= UI：上傳與推論 =======
 
 st.subheader("圖片推論")
-image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False)
+image_file = st.file_uploader("上傳圖片 (jpg/png/webp)", type=["jpg", "jpeg", "png", "bmp", "webp"], accept_multiple_files=False, disabled=(model is None))
 
 col1, col2 = st.columns(2)
 with col1:
-    if image_file is not None:
+    if image_file is not None and model is not None and backend is not None:
         image_bytes = image_file.read()
         img = Image.open(io.BytesIO(image_bytes))
         st.image(img, caption="原始圖片", use_column_width=True)
 with col2:
-    if image_file is not None:
+    if image_file is not None and model is not None and backend is not None:
         with st.spinner("模型推論中…"):
             rgb = _pil_to_np_rgb(img)
             annotated = predict_image(rgb, backend, model)
@@ -174,9 +154,9 @@ with col2:
 
 st.markdown("---")
 st.subheader("影片推論")
-video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False)
+video_file = st.file_uploader("上傳影片 (mp4/mov/avi/mkv)", type=["mp4", "mov", "avi", "mkv"], accept_multiple_files=False, disabled=(model is None))
 
-if video_file is not None:
+if video_file is not None and model is not None and backend is not None:
     # 將上傳影片存成暫存檔
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video_file.name)[1]) as src_tmp:
         src_tmp.write(video_file.read())
