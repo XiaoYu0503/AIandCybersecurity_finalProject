@@ -1,10 +1,9 @@
 streamlit==1.38.0
-rich==13.7.1  # streamlit 1.38.0 要求 rich<14
-# 極簡、對 Cloud 友善的推論依賴（CPU）
-torch==2.2.0
-torchvision==0.17.0
-numpy==1.23.5
-opencv-python-headless==4.9.0.80
+rich==13.7.1  # 儘量壓在 <14，避免 Cloud 後步驟升到 14 造成不相容
+# 改用 ONNXRuntime（CPU）避免 Py3.13 下 torch 相關安裝失敗
+onnxruntime>=1.18.0
+numpy>=1.26.4,<3.0
+opencv-python-headless==4.10.0.84
 Pillow==10.4.0
 PyYAML==6.0.1
 tqdm==4.66.4

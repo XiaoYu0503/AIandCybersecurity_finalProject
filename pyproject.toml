@@ -1,12 +1,8 @@
 [project]
 name = "aiandcybersecurity-finalproject"
 version = "0.1.0"
-description = "Streamlit YOLOv7 inference app for 平交道障礙物辨識"
+description = "Streamlit ONNXRuntime inference app for 平交道障礙物辨識"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "XiaoYu"}]
-
-[tool.uv]
-python = "3.11"
-python-preference = "only-managed"

@@ -1,52 +1,48 @@
-# 平交道障礙物辨識（Streamlit App）
+# 平交道障礙物辨識（Streamlit App, ONNX）
 
-以本地 `best.pt`（YOLOv7 權重為主）進行圖片與影片偵測，信心度低於 0.7 的框不顯示。可部署至 Streamlit Cloud。
+改用 ONNXRuntime（CPU）做推論，避免在 Streamlit Cloud（Python 3.13）上安裝 torch/torchvision 造成的失敗；信心度低於 0.7 的框不顯示。
 
 ## 功能
 - 上傳圖片（jpg/png/webp）並即時顯示推論結果。
 - 上傳影片（mp4/mov/avi/mkv），逐幀推論並輸出繪製後影片。
 - 只顯示信心度 `≥ 0.7` 的偵測框。
- - 側邊欄可上傳模型權重（.pt），未上傳前不會載入模型（避免 Cloud 缺檔錯誤）。
+- 側邊欄上傳 ONNX 權重（.onnx），未上傳前不會載入模型（避免 Cloud 缺檔）。
 
 ## 專案結構
 ```
 .
 ├─ app.py              # Streamlit 主程式
-├─ best.pt             # 訓練完成的模型權重（需自行提供；檔案大請勿直接 push）
+├─ model.onnx          # (可選) 本地開發用之 ONNX 權重檔（部署時建議改由 UI 上傳）
 ├─ requirements.txt    # 相依套件清單
-├─ runtime.txt         # Streamlit Cloud 指定 Python 版本 (3.10)
+├─ runtime.txt         # (可選) 舊式 Python 版本宣告，Cloud 可能忽略
 ├─ packages.txt        # 系統層必要套件 (libgl, ffmpeg 等)
 └─ README.md
 ```
 
 ## 本地執行方式
-1. 於專案根目錄（與 `app.py` 同層）放置 `best.pt`。
-2. 建議使用虛擬環境並安裝相依：
+1. 建議使用虛擬環境並安裝相依：
    ```bash
    pip install -r requirements.txt
    ```
-3. 啟動：
+2. 啟動：
    ```bash
    streamlit run app.py
    ```
+3. 於側邊欄上傳 `model.onnx`（或放置在專案根目錄使用預設 `model.onnx`）。
 
 ## 部署到 Streamlit Cloud
-1. 將此資料夾推送到 GitHub（例如：`XiaoYu0503/AIandCybersecurity_finalProject`），注意不要把超過 100MB 的 `best.pt` 推到 GitHub（已在 .gitignore 排除）。
+1. 將此資料夾推送到 GitHub（例如：`XiaoYu0503/AIandCybersecurity_finalProject`），避免把大型權重檔推到 GitHub（.gitignore 已排除 .pt）。
 2. 在 Streamlit Cloud 建立新 App：
    - Repository：選擇上述 Repo
    - Branch：main
    - Main file path：`app.py`
-3. 啟動後，於 UI 上傳圖片或影片即可推論。
+3. 啟動後，於 UI 上傳 `model.onnx`、圖片或影片即可推論。
 
 > 注意：
-> - 優先以 torch.hub 載入 YOLOv7（需要可連網以抓取 `WongKinYiu/yolov7` hub），失敗時再嘗試 ultralytics 與 YOLOv5 後備。
-> - 部署於 Cloud 時，由於 GitHub 有 100MB 限制，建議：
->   1) 在 Streamlit Cloud 的儲存空間手動上傳 `best.pt`（與 `app.py` 同層），或
->   2) 於啟動時從您可存取的雲端（例如 S3、GDrive 直鏈）下載 `best.pt` 至臨時目錄再載入。
-> - 若出現 `ImportError: import cv2`，請確認已存在 `packages.txt`（含 libgl1、libglib2.0-0）與使用 headless OpenCV；本 repo 已提供降版 `opencv-python-headless==4.9.0.80`、釘選 `torch/torchvision` 與 `python-3.10`。
-> - 若看到 `YOLOv7 錯誤: pip install 'numpy<1.24.0'`，已於 requirements 釘選 `numpy==1.23.5`；請在 Cloud re-run 以套用。
-> - 本專案偏向 CPU 推論（未強制指定 GPU），推論速度取決於影片長度與模型大小。
-> - 若 Cloud 環境的 OpenCV 不支援某些編碼器，影片寫檔可能失敗；可改傳短片、降低解析度或改用其他容器（如 .avi）。
+> - 本版本以 ONNXRuntime (CPU) 推論，不依賴 torch/torchvision，避免 Python 3.13 環境相容性問題。
+> - 若 `cv2` 載入失敗，請確認 `packages.txt` 已含 `libgl1`、`libglib2.0-0`、`ffmpeg`，且使用 headless 版本。
+> - OpenCV 編碼器在雲端環境可能受限；若影片寫檔失敗，請嘗試較短影片或不同容器。
+> - 若您只有 `.pt` 權重，請先在本地將 YOLOv7 的 `best.pt` 轉為 `model.onnx` 後再上傳。（可參考 YOLOv7 repo 的 export 腳本）
 
 ## 授權
 僅示範用途，依您資料與模型而定。
